@@ -1,0 +1,142 @@
+x-logging: &x-logging
+  logging:
+    driver: 'json-file'
+    options:
+      max-file: '5'
+      max-size: '10m'
+
+services:
+  traefik:
+    image: traefik:2.11
+    container_name: appwrite-traefik
+    <<: *x-logging
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.constraints=Label(`traefik.constraint-label-stack`,`appwrite`)
+      - --entrypoints.appwrite_web.address=:80
+      - --entrypoints.appwrite_websecure.address=:443
+    restart: unless-stopped
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - appwrite
+    networks:
+      - gateway
+      - appwrite
+
+  appwrite:
+    image: appwrite/appwrite:1.8.1
+    container_name: appwrite
+    <<: *x-logging
+    restart: unless-stopped
+    networks:
+      - appwrite
+    labels:
+      - traefik.enable=true
+      - traefik.constraint-label-stack=appwrite
+      - traefik.docker.network=appwrite
+      - traefik.http.services.appwrite_api.loadbalancer.server.port=80
+      - traefik.http.routers.appwrite_api_http.entrypoints=appwrite_web
+      - traefik.http.routers.appwrite_api_http.rule=PathPrefix(`/`)
+      - traefik.http.routers.appwrite_api_http.service=appwrite_api
+      - traefik.http.routers.appwrite_api_https.entrypoints=appwrite_websecure
+      - traefik.http.routers.appwrite_api_https.rule=PathPrefix(`/`)
+      - traefik.http.routers.appwrite_api_https.service=appwrite_api
+      - traefik.http.routers.appwrite_api_https.tls=true
+    volumes:
+      - appwrite-cache:/storage/cache:rw
+    depends_on:
+      - mariadb
+      - redis
+    environment:
+      - _APP_ENV
+      - _APP_LOCALE
+      - _APP_OPENSSL_KEY_V1
+      - _APP_DOMAIN
+      - _APP_DOMAIN_TARGET_CNAME
+      - _APP_DOMAIN_TARGET_AAAA
+      - _APP_DOMAIN_TARGET_A
+      - _APP_DOMAIN_TARGET_CAA
+      - _APP_DNS
+      - _APP_REDIS_HOST
+      - _APP_REDIS_PORT
+      - _APP_REDIS_USER
+      - _APP_REDIS_PASS
+      - _APP_DB_HOST
+      - _APP_DB_PORT
+      - _APP_DB_SCHEMA
+      - _APP_DB_USER
+      - _APP_DB_PASS
+      - _APP_SYSTEM_EMAIL_NAME
+      - _APP_SYSTEM_EMAIL_ADDRESS
+      - _APP_OPTIONS_ABUSE=disabled
+      - _APP_OPTIONS_ROUTER_PROTECTION
+      - _APP_OPTIONS_FORCE_HTTPS
+      - _APP_OPTIONS_ROUTER_FORCE_HTTPS
+
+  appwrite-console:
+    <<: *x-logging
+    container_name: appwrite-console
+    image: appwrite/console:7.5.7
+    restart: unless-stopped
+    networks:
+      - appwrite
+    labels:
+      - "traefik.enable=true"
+      - "traefik.constraint-label-stack=appwrite"
+      - "traefik.docker.network=appwrite"
+      - "traefik.http.services.appwrite_console.loadbalancer.server.port=80"
+      - traefik.http.routers.appwrite_console_http.entrypoints=appwrite_web
+      - traefik.http.routers.appwrite_console_http.rule=PathPrefix(`/console`)
+      - traefik.http.routers.appwrite_console_http.service=appwrite_console
+      - traefik.http.routers.appwrite_console_https.entrypoints=appwrite_websecure
+      - traefik.http.routers.appwrite_console_https.rule=PathPrefix(`/console`)
+      - traefik.http.routers.appwrite_console_https.service=appwrite_console
+      - traefik.http.routers.appwrite_console_https.tls=true
+
+  mariadb:
+    image: mariadb:10.11
+    container_name: appwrite-mariadb
+    <<: *x-logging
+    restart: unless-stopped
+    networks:
+      - appwrite
+    volumes:
+      - appwrite-mariadb:/var/lib/mysql:rw
+    environment:
+      - MYSQL_ROOT_PASSWORD=${_APP_DB_ROOT_PASS}
+      - MYSQL_DATABASE=${_APP_DB_SCHEMA}
+      - MYSQL_USER=${_APP_DB_USER}
+      - MYSQL_PASSWORD=${_APP_DB_PASS}
+      - MARIADB_AUTO_UPGRADE=1
+    command: 'mysqld --innodb-flush-method=fsync'
+
+  redis:
+    image: redis:7.2.4-alpine
+    container_name: appwrite-redis
+    <<: *x-logging
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory            512mb
+      --maxmemory-policy     allkeys-lru
+      --maxmemory-samples    5
+    networks:
+      - appwrite
+    volumes:
+      - appwrite-redis:/data:rw
+
+networks:
+  gateway:
+    name: gateway
+  appwrite:
+    name: appwrite
+
+volumes:
+  appwrite-mariadb:
+  appwrite-redis:
+  appwrite-cache:
